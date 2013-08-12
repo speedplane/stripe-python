@@ -493,6 +493,11 @@ class StripeObject(object):
       self.id = id
 
   def __setattr__(self, k, v):
+    if v == "":
+      raise ValueError(
+        "You cannot set %s to an empty string. "
+        "We interpret empty strings as None in requests."
+        "You may set %s.%s = None to delete the property"%(k, str(self), k))
     self.__dict__[k] = v
     self._values.add(k)
     if k not in self._permanent_attributes:
@@ -713,7 +718,8 @@ class UpdateableAPIResource(APIResource):
       for k in self._unsaved_values:
         if k == 'id':
           continue
-        params[k] = getattr(self, k)
+        v = getattr(self, k)
+        params[k] = v if v is not None else ""
 
       url = self.instance_url()
       response, api_key = requestor.request('post', url, params)
