@@ -20,6 +20,7 @@ DUMMY_CARD = {
     'exp_month': NOW.month,
     'exp_year': NOW.year + 4
 }
+
 DUMMY_CHARGE = {
     'amount': 100,
     'currency': 'usd',
@@ -38,6 +39,17 @@ DUMMY_COUPON = {
     'percent_off': 25,
     'duration': 'repeating',
     'duration_in_months': 5
+}
+
+DUMMY_RECIPIENT = {
+    'name': 'John Doe',
+    'type': 'individual'
+}
+
+DUMMY_TRANSFER = {
+    'amount': 400,
+    'currency': 'usd',
+    'recipient': 'self'
 }
 
 SAMPLE_INVOICE = json.loads("""
@@ -120,12 +132,6 @@ class StripeObjectEncoderTests(StripeTestCase):
         encoded_stripe_object = stripe.StripeObjectEncoder().default(invoice)
         self.assertTrue(isinstance(encoded_stripe_object, dict),
                         "StripeObject encoded to %s" % (type(encoded_stripe_object),))
-
-class StripeAPIRequestorTests(StripeTestCase):
-    def test_builds_url_correctly_with_base_url_query_params(self):
-        charges = stripe.Charge.all(count=5)
-        paid_charges = charges.all(paid=True)
-        self.assertTrue(isinstance(paid_charges.data, list))
 
 class FunctionalTests(StripeTestCase):
     def test_dns_failure(self):
@@ -232,6 +238,12 @@ class BalanceTransactionTest(StripeTestCase):
         balance_transactions = stripe.BalanceTransaction.all()
         self.assertTrue(hasattr(balance_transactions, 'count'))
         self.assertTrue(isinstance(balance_transactions.data, list))
+
+class ApplicationFeeTest(StripeTestCase):
+    def test_list_application_fees(self):
+        application_fees = stripe.ApplicationFee.all()
+        self.assertTrue(hasattr(application_fees, 'count'))
+        self.assertTrue(isinstance(application_fees.data, list))
 
 class CustomerTest(StripeTestCase):
     def test_list_customers(self):
@@ -401,6 +413,77 @@ class PlanTest(StripeTestCase):
         self.assertEqual(name, plan.name)
         self.assertEqual(p.amount, plan.amount) # should load all the properties
         p.delete()
+
+class MetadataTest(StripeTestCase):
+    def setUp(self):
+        super(MetadataTest, self).setUp()
+        self.initial_metadata = {
+            'address': '77 Massachusetts Ave, Cambridge',
+            'uuid': 'id'
+        }
+
+        charge = stripe.Charge.create(metadata=self.initial_metadata, **DUMMY_CHARGE)
+        customer = stripe.Customer.create(metadata=self.initial_metadata, card=DUMMY_CARD)
+        recipient = stripe.Recipient.create(metadata=self.initial_metadata, **DUMMY_RECIPIENT)
+        transfer = stripe.Transfer.create(metadata=self.initial_metadata, **DUMMY_TRANSFER)
+
+        self.support_metadata = [charge, customer, recipient, transfer]
+
+    def test_noop_metadata(self):
+        for obj in self.support_metadata:
+            obj.description = 'test'
+            obj.save()
+            metadata = obj.retrieve(obj.id).metadata
+            self.assertEqual(self.initial_metadata, metadata.to_dict())
+
+    def test_unset_metadata(self):
+        for obj in self.support_metadata:
+            obj.metadata = None
+            expected_metadata = {}
+            obj.save()
+            metadata = obj.retrieve(obj.id).metadata
+            self.assertEqual(expected_metadata, metadata.to_dict())
+
+    def test_whole_update(self):
+        for obj in self.support_metadata:
+            expected_metadata = {'txn_id': '3287423s34'}
+            obj.metadata = expected_metadata.copy()
+            obj.save()
+            metadata = obj.retrieve(obj.id).metadata
+            self.assertEqual(expected_metadata, metadata.to_dict())
+
+    def test_individual_delete(self):
+        for obj in self.support_metadata:
+            obj.metadata['uuid'] = None
+            expected_metadata = {'address': self.initial_metadata['address']}
+            obj.save()
+            metadata = obj.retrieve(obj.id).metadata
+            self.assertEqual(expected_metadata, metadata.to_dict())
+
+    def test_individual_update(self):
+        for obj in self.support_metadata:
+            obj.metadata['txn_id'] = 'abc'
+            expected_metadata = {'txn_id': 'abc'}
+            expected_metadata.update(self.initial_metadata)
+            obj.save()
+            metadata = obj.retrieve(obj.id).metadata
+            self.assertEqual(expected_metadata, metadata.to_dict())
+
+    def test_combo_update(self):
+        for obj in self.support_metadata:
+            obj.metadata['txn_id'] = 'bar'
+            obj.metadata = {'uid': '6735'}
+            obj.save()
+            metadata = obj.retrieve(obj.id).metadata
+            self.assertEqual({'uid': '6735'}, metadata.to_dict())
+
+        for obj in self.support_metadata:
+            obj.metadata = {'uid': '6735'}
+            obj.metadata['foo'] = 'bar'
+            obj.save()
+            metadata = obj.retrieve(obj.id).metadata
+            self.assertEqual({'uid': '6735', 'foo': 'bar'}, metadata.to_dict())
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -118,7 +118,7 @@ def convert_to_stripe_object(resp, api_key):
             'invoice' : Invoice, 'invoiceitem' : InvoiceItem,
             'plan' : Plan, 'coupon': Coupon, 'token' : Token, 'event': Event,
             'transfer': Transfer, 'list': ListObject, 'recipient': Recipient,
-            'card': Card }
+            'card': Card, 'application_fee': ApplicationFee }
 
   if isinstance(resp, list):
     return [convert_to_stripe_object(i, api_key) for i in resp]
@@ -522,6 +522,9 @@ class StripeObject(object):
     else:
       raise KeyError(k)
 
+  def __delitem__(self, k):
+    raise TypeError("You cannot delete attributes on a StripeObject. To unset a property, set it to None.")
+
   def get(self, k, default=None):
     try:
       return self[k]
@@ -576,6 +579,9 @@ class StripeObject(object):
       self._values.add(k)
       self._transient_values.discard(k)
       self._unsaved_values.discard(k)
+
+    if 'metadata' in values:
+      self.previous_metadata = values['metadata']
 
   def __repr__(self):
     type_string = ''
@@ -711,22 +717,43 @@ class CreateableAPIResource(APIResource):
 
 class UpdateableAPIResource(APIResource):
   def save(self):
-    if self._unsaved_values:
+    updated_params = self.serialize(self)
+
+    if getattr(self, 'metadata', None):
+      updated_params['metadata'] = self.serialize_metadata()
+
+    if updated_params:
       requestor = APIRequestor(self.api_key)
 
-      params = {}
-      for k in self._unsaved_values:
-        if k == 'id':
-          continue
-        v = getattr(self, k)
-        params[k] = v if v is not None else ""
-
       url = self.instance_url()
-      response, api_key = requestor.request('post', url, params)
+      response, api_key = requestor.request('post', url, updated_params)
       self.refresh_from(response, api_key)
     else:
       logger.debug("Trying to save already saved object %r" % (self, ))
     return self
+
+  def serialize_metadata(self):
+    if 'metadata' in self._unsaved_values:
+      # the metadata object has been reassigned
+      # i.e. as object.metadata = {key: val}
+      metadata_update = self.metadata
+      keys_to_unset = set(self.previous_metadata.keys()) - set(self.metadata.keys())
+      for key in keys_to_unset:
+        metadata_update[key] = ""
+
+      return metadata_update
+    else:
+      return self.serialize(self.metadata)
+
+  def serialize(self, obj):
+    params = {}
+    if obj._unsaved_values:
+      for k in obj._unsaved_values:
+        if k == 'id' or k == 'previous_metadata':
+          continue
+        v = getattr(obj, k)
+        params[k] = v if v is not None else ""
+    return params
 
 class DeletableAPIResource(APIResource):
   def delete(self, **params):
@@ -784,6 +811,25 @@ class Charge(CreateableAPIResource, ListableAPIResource, UpdateableAPIResource):
     response, api_key = requestor.request('post', url, params)
     self.refresh_from({ 'dispute' : response }, api_key, True)
     return self.dispute
+
+  def close_dispute(self):
+    requestor = APIRequestor(self.api_key)
+    url = self.instance_url() + '/dispute/close'
+    response, api_key = requestor.request('post', url, {})
+    self.refresh_from({ 'dispute' : response }, api_key, True)
+    return self.dispute
+
+class ApplicationFee(ListableAPIResource):
+  @classmethod
+  def class_name(cls):
+    return 'application_fee'
+
+  def refund(self, **params):
+    requestor = APIRequestor(self.api_key)
+    url = self.instance_url() + '/refund'
+    response, api_key = requestor.request('post', url, params)
+    self.refresh_from(response, api_key)
+    return self
 
 class Customer(CreateableAPIResource, UpdateableAPIResource,
                ListableAPIResource, DeletableAPIResource):
@@ -857,7 +903,7 @@ class Coupon(CreateableAPIResource, DeletableAPIResource, ListableAPIResource):
 class Event(ListableAPIResource):
   pass
 
-class Transfer(CreateableAPIResource, ListableAPIResource):
+class Transfer(CreateableAPIResource, UpdateableAPIResource, ListableAPIResource):
   pass
 
 class Recipient(CreateableAPIResource, UpdateableAPIResource,
