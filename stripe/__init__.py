@@ -426,7 +426,8 @@ class APIRequestor(object):
     args['validate_certificate'] = verify_ssl_certs
     # GAE requests time out after 60 seconds, so make sure we leave
     # some time for the application to handle a slow Stripe
-    args['deadline'] = 55
+    # [speedplane] Increase b/c many requests are in TaskQueue
+    args['deadline'] = 55*5 # 55
 
     try:
       result = urlfetch.fetch(**args)
